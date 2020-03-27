@@ -1,4 +1,5 @@
 const EventUtils = require('util-events')
+const ConsoleLogger = require('util-console-logger');
 cc.Class({
   name: 'Gif',
   extends: cc.Component,
@@ -7,9 +8,17 @@ cc.Class({
       type: cc.SpriteAtlas,
       default: null
     },
+    frames: {
+      type: [cc.SpriteFrame],
+      default: () => []
+    },
     srcBlendFactor: {
-      type: cc.BlendFunc.BlendFactor,
-      default: cc.BlendFunc.BlendFactor.ONE
+      type: cc.macro ? cc.macro.BlendFactor : cc.BlendFunc.BlendFactor,
+      default: cc.macro.BlendFactor ? cc.macro.BlendFactor.SRC_ALPHA : cc.BlendFunc.BlendFactor.SRC_ALPHA,
+    },
+    dstBlendFactor: {
+      type: cc.macro ? cc.macro.BlendFactor : cc.BlendFunc.BlendFactor,
+      default: cc.macro.BlendFactor ? cc.macro.BlendFactor.ONE_MINUS_SRC_ALPHA : cc.BlendFunc.BlendFactor.ONE_MINUS_SRC_ALPHA,
     },
     wrapMode: {
       type: cc.WrapMode,
@@ -28,65 +37,34 @@ cc.Class({
     sample: 10,
     repeatCount: -1
   },
-  statics:{
-    createOn (parentNode, spriteFrames, {
-      from = -1,
-      to = -1,
-      sample = 10,
-      prefix = '',
-      suffix = '',
-      srcBlendFactor = cc.BlendFunc.BlendFactor.ONE,
-      wrapMode = cc.WrapMode.Loop,
-      playOnLoad = true,
-      onAnimateFinished = null,
-      repeatCount = -1,
-      frameSequence = ''
-    }) {
-      // atlas
-      const atlas = new cc.SpriteAtlas();
-      atlas._spriteFrames = spriteFrames;
-
-      // node
-      const node = new cc.Node('comp-gif-node');
-      node.parent = parentNode
-
-      // gif
-      const gif = this.gif = new Gif();
-      gif.node = node;
-
-      // frequently used options
-      gif.atlas = atlas;
-      gif.from = from;
-      gif.to = to;
-      gif.sample = sample;
-      gif.prefix = prefix;
-      gif.suffix = suffix;
-
-      // less frequently used options
-      gif.srcBlendFactor = srcBlendFactor;
-      gif.wrapMode = wrapMode;
-      gif.playOnLoad = playOnLoad;
-      gif.onAnimateFinished = onAnimateFinished;
-      gif.repeatCount = repeatCount;
-      gif.frameSequence = frameSequence;
-
-      // init gif
-      node._components.push(gif);
-      gif.init()
-
-      return gif
-    }
-  },
   onLoad () {
+    this.logger = new ConsoleLogger(this.name);
     this.init();
   },
   init () {
-    this._frames = this.atlas.getSpriteFrames();
-    this._createAtlas();
+    const noFrames = !this.frames || !this.frames.length;
+    const noAtlas = !this.atlas;
+    if (noFrames && noAtlas) {
+      this.logger.warn(`one of frames and atlas is required!`);
+      return;
+    }
+    if (this.atlas) {
+      this.logger.log(`using atlas`);
+      this._frames = this.atlas.getSpriteFrames();
+      if (!this._frames.length) {
+        this.logger.log(`with frames`);
+        this._frames = this.frames;
+      }
+      this._createAtlas();
+    } else {
+      this.logger.log(`using frames`);
+      this._frames = this.frames;
+    }
 
     let sprite = this.getComponent(cc.Sprite)
     if (!sprite) sprite = this.addComponent(cc.Sprite);
     sprite.srcBlendFactor = this.srcBlendFactor;
+    sprite.dstBlendFactor = this.dstBlendFactor;
     const anim = this.animation = this.addComponent(cc.Animation);
     const clip = this.clip = cc.AnimationClip.createWithSpriteFrames(this._getFrames(), this.sample);
 
@@ -98,8 +76,16 @@ cc.Class({
     }
   },
   showFrameAt (index) {
-    const frame = this._frames[index];
+    const frame = (this.frames || this._frames)[this.frameIndex = index];
     if (!frame) return false;
+    const sprite = this.node.getComponent(cc.Sprite)
+    sprite.spriteFrame = frame;
+    return frame;
+  },
+  showFrame (name) {
+    const frame = (this.frames || this._frames).find(f => f._name === name);
+    if (!frame) return false;
+    this.frameName = name;
     const sprite = this.node.getComponent(cc.Sprite)
     sprite.spriteFrame = frame;
     return frame;
@@ -118,13 +104,16 @@ cc.Class({
     })
   },
   _onAnimateFinished (e) {
-    EventUtils.callHandler(this.onAnimateFinished, [e, this.animation, this]);
+    if (this.onAnimateFinished) {
+      EventUtils.callHandler(this.onAnimateFinished, [e, this.animation, this]);
+    }
   },
   _createAtlas () {
     this.atlas = new cc.SpriteAtlas();
     this._frames.forEach(f => this.atlas._spriteFrames[f._name] = f);
   },
   _getFrames () {
+    if (this.frames && this.frames.length) return this.frames;
     // frame sequence has higher priority thant from+to
     if (this.frameSequence) {
       let indices = this.frameSequence.split(',');
